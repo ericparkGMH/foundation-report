@@ -1,0 +1,412 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>미수금 월결산</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+<style>
+  :root{
+    --ink:#17212B; --paper:#F5F6F8; --surface:#FFFFFF; --line:#E4E8ED;
+    --green:#157F5B; --green-soft:#E7F2ED; --red:#BC4630; --red-soft:#F7E9E5;
+    --muted:#5B6775; --muted2:#8A94A1; --shadow:0 1px 2px rgba(23,33,43,.05),0 8px 24px rgba(23,33,43,.06);
+    --mono:ui-monospace,"SF Mono",Menlo,Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Apple SD Gothic Neo","Malgun Gothic","Segoe UI",sans-serif;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--paper);color:var(--ink);font-family:var(--sans);
+       -webkit-font-smoothing:antialiased;line-height:1.5}
+  .wrap{max-width:960px;margin:0 auto;padding:40px 24px 80px}
+  header.top{display:flex;flex-direction:column;gap:6px;margin-bottom:8px}
+  .kicker{font-size:12px;letter-spacing:.14em;text-transform:uppercase;color:var(--green);font-weight:700}
+  h1{font-size:30px;font-weight:800;margin:0;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:15px;max-width:60ch}
+  .privacy{display:inline-flex;align-items:center;gap:7px;margin-top:14px;padding:7px 12px;
+    background:var(--green-soft);color:var(--green);border-radius:999px;font-size:12.5px;font-weight:600}
+  .privacy svg{width:14px;height:14px}
+
+  .panels{display:grid;grid-template-columns:1fr 1fr;gap:18px;margin-top:28px}
+  @media(max-width:720px){.panels{grid-template-columns:1fr}}
+  .panel{background:var(--surface);border:1px solid var(--line);border-radius:14px;padding:20px;box-shadow:var(--shadow)}
+  .panel h2{margin:0 0 2px;font-size:17px;font-weight:750}
+  .panel .hint{color:var(--muted2);font-size:12.5px;margin-bottom:16px}
+  .slot{margin-top:10px}
+  .slot .lab{font-size:12.5px;font-weight:650;color:var(--muted);margin-bottom:6px;display:block}
+  .drop{border:1.5px dashed var(--line);border-radius:10px;padding:14px;cursor:pointer;
+    display:flex;align-items:center;gap:10px;transition:border-color .15s,background .15s;background:#FBFCFD}
+  .drop:hover{border-color:#B9C2CC}
+  .drop.over{border-color:var(--green);background:var(--green-soft)}
+  .drop.filled{border-style:solid;border-color:var(--green);background:var(--green-soft)}
+  .drop .ic{width:30px;height:30px;flex:none;border-radius:7px;background:#EEF1F4;display:grid;place-items:center;color:var(--muted)}
+  .drop.filled .ic{background:#fff;color:var(--green)}
+  .drop .txt{min-width:0}
+  .drop .t1{font-size:13px;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .drop .t2{font-size:11.5px;color:var(--muted2)}
+  .drop input{display:none}
+
+  .runbar{display:flex;align-items:center;gap:14px;margin-top:26px}
+  button.run{background:var(--ink);color:#fff;border:0;border-radius:10px;padding:13px 26px;
+    font-size:15px;font-weight:700;cursor:pointer;font-family:var(--sans);transition:transform .08s,opacity .15s}
+  button.run:hover{opacity:.92}button.run:active{transform:translateY(1px)}
+  button.run:disabled{opacity:.4;cursor:not-allowed}
+  .runbar .note{font-size:13px;color:var(--muted2)}
+
+  .results{margin-top:32px;display:flex;flex-direction:column;gap:20px}
+  .result{background:var(--surface);border:1px solid var(--line);border-radius:14px;overflow:hidden;box-shadow:var(--shadow)}
+  .result .rhead{display:flex;align-items:center;justify-content:space-between;padding:16px 20px;border-bottom:1px solid var(--line)}
+  .result .rhead .name{font-size:16px;font-weight:750}
+  .badge{display:inline-flex;align-items:center;gap:6px;font-size:12.5px;font-weight:700;padding:5px 11px;border-radius:999px}
+  .badge.ok{background:var(--green-soft);color:var(--green)}
+  .badge.bad{background:var(--red-soft);color:var(--red)}
+
+  /* signature: balancing equation */
+  .bridge{padding:22px 20px;background:linear-gradient(180deg,#FCFDFD,#F8FAFB);border-bottom:1px solid var(--line)}
+  .eq{display:flex;flex-wrap:wrap;align-items:flex-end;gap:14px 10px;font-family:var(--mono)}
+  .term{display:flex;flex-direction:column;gap:3px}
+  .term .v{font-size:19px;font-weight:600;letter-spacing:-.01em}
+  .term .k{font-size:10.5px;letter-spacing:.03em;color:var(--muted2);font-family:var(--sans);font-weight:600}
+  .op{font-size:18px;color:var(--muted2);padding-bottom:20px;font-weight:400}
+  .term.result-term .v{color:var(--green)}
+  .bad .term.result-term .v{color:var(--red)}
+  .diffline{margin-top:12px;font-size:12.5px;color:var(--muted);font-family:var(--sans)}
+  .diffline b{font-family:var(--mono);color:var(--ink)}
+
+  table.stats{width:100%;border-collapse:collapse;font-size:13.5px}
+  table.stats td{padding:9px 20px;border-bottom:1px solid #EEF1F4}
+  table.stats tr:last-child td{border-bottom:0}
+  table.stats td.lab{color:var(--muted)}
+  table.stats td.cnt{text-align:right;color:var(--muted2);font-family:var(--mono);width:70px}
+  table.stats td.amt{text-align:right;font-family:var(--mono);font-weight:600;width:150px;font-variant-numeric:tabular-nums}
+
+  .downloads{display:flex;flex-wrap:wrap;gap:8px;padding:16px 20px}
+  a.dl{display:inline-flex;align-items:center;gap:7px;font-size:12.5px;font-weight:600;color:var(--ink);
+    text-decoration:none;border:1px solid var(--line);border-radius:8px;padding:8px 12px;background:#fff;transition:border-color .15s,background .15s}
+  a.dl:hover{border-color:var(--green);background:var(--green-soft)}
+  a.dl svg{width:13px;height:13px;color:var(--muted)}
+
+  .err{background:var(--red-soft);color:var(--red);border:1px solid #EBC9C0;border-radius:10px;padding:12px 16px;font-size:13.5px;margin-top:16px}
+
+  .warns{background:#FBF3E4;border-bottom:1px solid #F0E3C8;padding:14px 20px}
+  .warns .wtitle{display:flex;align-items:center;gap:7px;font-size:12.5px;font-weight:700;color:#9A6B12;margin-bottom:8px}
+  .warns .wtitle svg{width:15px;height:15px}
+  .warns .witem{font-size:13px;color:#7A5A16;padding:4px 0 4px 22px;position:relative}
+  .warns .witem::before{content:'·';position:absolute;left:9px;font-weight:700}
+  .closeslot{margin-top:14px;padding-top:14px;border-top:1px dashed var(--line)}
+  .closein{width:100%;border:1px solid var(--line);border-radius:8px;padding:9px 11px;font-size:13px;
+    font-family:var(--mono);color:var(--ink);background:#FBFCFD;outline:none}
+  .closein:focus{border-color:var(--green);background:#fff}
+  .foot{margin-top:36px;font-size:12px;color:var(--muted2);line-height:1.7}
+  .foot code{font-family:var(--mono);background:#EDF0F3;padding:1px 5px;border-radius:4px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header class="top">
+    <span class="kicker">원무팀 · 미수금 결산</span>
+    <h1>미수금 월결산</h1>
+    <p class="sub">지난달 최종 보고본과 이번 달 raw 파일을 올리면, 신규·회입·이월을 가려내고 검증식이 맞아떨어지는지 확인해 결과 명단을 내려줍니다.</p>
+    <span class="privacy">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l7 4v6c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6z"/></svg>
+      모든 계산은 이 브라우저 안에서만 — 파일은 어디로도 전송되지 않습니다
+    </span>
+  </header>
+
+  <div class="panels">
+    <section class="panel" id="panel-외래">
+      <h2>외래</h2>
+      <div class="hint">개인·직원미수만 집계 (AK미수·기관·보증·미수X 등 제외)</div>
+    </section>
+    <section class="panel" id="panel-입원">
+      <h2>입원</h2>
+      <div class="hint">SJ·SH(산후조리원·산후병동)·현혈미수 제외 · 이월 부분수납 반영</div>
+    </section>
+  </div>
+
+  <div class="runbar">
+    <button class="run" id="runBtn" disabled>결산 실행</button>
+    <span class="note" id="runNote">각 과에 전월·당월 파일을 넣어주세요</span>
+  </div>
+
+  <div class="results" id="results"></div>
+  <div id="errbox"></div>
+
+  <div class="foot">
+    · 입력 형식: 지난달 최종 보고본(제목행·고유번호 포함) 및 이번 달 raw 모두 인식 — <code>.xlsx</code>, <code>.xls</code>, <code>.csv</code><br>
+    · 전월엔 지난달 <b>최종 보고본</b>을, 당월엔 이번 달 <b>raw</b>를 넣으면 됩니다. 합계행·메모조각·회입 섹션은 자동으로 걸러냅니다.<br>
+    · 검증식 — 외래: 전월 + 신규 − 회입 = 당월 / 입원: 전월 + 신규 − 회입 − 이월부분수납 = 당월
+  </div>
+</div>
+
+<script>
+"use strict";
+// ---------- 확정 규칙 ----------
+const CORE=['IDNO','타급','환자명','내/입원일','퇴원일','성별','과','급종','병실','본인계','입금계','조정계','미수계','미수구분','담당자','미수사유'];
+const BASE_CAT=['코로나검사미수','공상미수','재택치료','HPV예방접종미수','불임지원미수','기관청구미수','AK미수','부산의원'];
+const KEYWORDS=['감면','기관','테스트','미수X','미수 X','미수x','인터네셔널SOS','인터네셔널 SOS','재택치료','사무실 보고','보증'];
+const DOMAIN={'외래':{extraCat:[],dept:[]}, '입원':{extraCat:['현혈미수'],dept:['SJ','SH']}};
+const OUTCOLS=['IDNO','환자명','내/입원일','퇴원일','과','급종','미수계','미수구분','담당자','미수사유'];
+
+const toInt=s=>{ if(s==null)return 0; s=String(s).replace(/,/g,'').trim(); if(s==='')return 0;
+  const n=Number(s); return Number.isFinite(n)?Math.round(n):0; };
+const isBlank=s=> s==null || String(s).trim()==='';
+const keyOf=r=> String(r['IDNO']).trim()+'|'+String(r['내/입원일']).trim();
+const won=n=> (n<0?'-':'')+Math.abs(n).toLocaleString('ko-KR')+'원';
+
+// ---------- 파일 읽기 ----------
+async function readRows(file){
+  const buf=await file.arrayBuffer();
+  let aoa;
+  if(/\.(xlsx|xls)$/i.test(file.name)){
+    const wb=XLSX.read(buf,{type:'array'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    aoa=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+  }else{ // csv (cp949 우선)
+    let text;
+    try{ text=new TextDecoder('euc-kr').decode(buf); }catch(e){ text=new TextDecoder('utf-8').decode(buf); }
+    const wb=XLSX.read(text,{type:'string'});
+    const ws=wb.Sheets[wb.SheetNames[0]];
+    aoa=XLSX.utils.sheet_to_json(ws,{header:1,raw:true,defval:''});
+  }
+  aoa=aoa.map(row=>row.map(c=>c==null?'':String(c)));
+  // 헤더행(=IDNO 포함) 탐색
+  let hrow=-1;
+  for(let i=0;i<Math.min(6,aoa.length);i++){
+    if(aoa[i].some(c=>String(c).trim()==='IDNO')){hrow=i;break;}
+  }
+  if(hrow<0) throw new Error(file.name+" : 'IDNO' 헤더를 찾지 못했습니다");
+  const head=aoa[hrow].map(c=>String(c).trim());
+  const idPos=head.indexOf('IDNO');
+  const rows=[];
+  for(let i=hrow+1;i<aoa.length;i++){
+    const raw=aoa[i];
+    const idcell=String(raw[idPos]??'').trim();
+    if(idcell==='IDNO') break;               // 회입 등 반복헤더(divider) 이후 중단
+    if(!/^[0-9]+$/.test(idcell)) continue;    // 합계행·메모조각 제거
+    const o={};
+    head.forEach((name,j)=>{ if(CORE.includes(name)) o[name]=raw[j]==null?'':String(raw[j]); });
+    o['미수금액']=toInt(o['미수계']);
+    rows.push(o);
+  }
+  // 점검용 메타
+  const hasUid=head.includes('고유번호');
+  const kind=(hrow>0||hasUid)?'report':'raw';
+  let filled=0,maxD='';
+  for(const r of rows){ if(!isBlank(r['퇴원일']))filled++; const d=String(r['내/입원일']||'').trim(); if(/^[0-9]{8}$/.test(d)&&d>maxD)maxD=d; }
+  const meta={kind, dischargeRatio: rows.length?filled/rows.length:0, maxDate:maxD, count:rows.length};
+  return {rows, meta};
+}
+
+// ---------- 필터 ----------
+function filterDb(rows,domain){
+  const rule=DOMAIN[domain]; const cats=BASE_CAT.concat(rule.extraCat);
+  const kept=[];
+  for(const r of rows){
+    const g=(r['미수구분']||'').trim();
+    const comb=g+' '+(r['미수사유']||'')+' '+(r['환자명']||'');
+    const mCat=cats.includes(g);
+    const mDept=rule.dept.includes((r['과']||'').trim());
+    const mKw=KEYWORDS.some(k=>comb.includes(k));
+    const m41=(r['미수금액']===41000)&&isBlank(r['미수사유']);
+    if(mCat||mDept||mKw||m41) continue;
+    if(isBlank(r['미수구분'])) r['미수구분']='개인미수';
+    r['KEY']=keyOf(r);
+    kept.push(r);
+  }
+  return kept;
+}
+
+// ---------- 결산 ----------
+function reconcile(prev,curr){
+  const sum=(arr)=>arr.reduce((a,r)=>a+r['미수금액'],0);
+  const keys=arr=>new Set(arr.map(r=>r['KEY']));
+  const kp=keys(prev), kc=keys(curr);
+  const inNew=k=>kc.has(k)&&!kp.has(k);
+  const inColl=k=>kp.has(k)&&!kc.has(k);
+  const carry=[...kp].filter(k=>kc.has(k));
+  const per=(arr)=>{const m=new Map();for(const r of arr)m.set(r['KEY'],(m.get(r['KEY'])||0)+r['미수금액']);return m;};
+  const ca=per(prev), cb=per(curr);
+  const A=sum(prev), M=sum(curr);
+  const newRows=curr.filter(r=>inNew(r['KEY']));
+  const collRows=prev.filter(r=>inColl(r['KEY']));
+  const NEW=sum(newRows), COLL=sum(collRows);
+  let PARTIAL=0; const partRows=[];
+  for(const k of carry){ const d=(ca.get(k)||0)-(cb.get(k)||0);
+    if(d!==0){ PARTIAL+=d; const nm=(prev.find(r=>r['KEY']===k)||{})['환자명']||'';
+      partRows.push({IDNO:k.split('|')[0],'내/입원일':k.split('|')[1],환자명:nm,전월미수:ca.get(k)||0,당월미수:cb.get(k)||0,'부분수납(증감)':(cb.get(k)||0)-(ca.get(k)||0)}); } }
+  const carryCurr=carry.reduce((a,k)=>a+(cb.get(k)||0),0);
+  const lhs=A+NEW-COLL-PARTIAL; const ok=(lhs===M);
+  const full=curr.map(r=>Object.assign({발생구분:inNew(r['KEY'])?'신규':'이월'},r));
+  return {A,M,NEW,COLL,PARTIAL,lhs,ok,newRows,collRows,partRows,full,
+    cnt:{prev:prev.length,curr:curr.length,new:newRows.length,coll:collRows.length,carry:carry.length,part:partRows.length},
+    carryCurr};
+}
+
+// ---------- CSV ----------
+function csv(rows,cols){
+  const esc=v=>{ v=(v==null?'':String(v)); return /[",\n]/.test(v)?'"'+v.replace(/"/g,'""')+'"':v; };
+  const head=cols.join(',');
+  const body=rows.map(r=>cols.map(c=>esc(r[c])).join(',')).join('\n');
+  return '\uFEFF'+head+'\n'+body+'\n';
+}
+function outCols(rows){ return OUTCOLS.filter(c=> rows.some(r=>c in r)); }
+function makeSummary(name,R){
+  const rows=[
+    {항목:'전월 필터 후',건수:R.cnt.prev,'금액(원)':won(R.A)},
+    {항목:'당월 필터 후',건수:R.cnt.curr,'금액(원)':won(R.M)},
+    {항목:'당월 신규 발생',건수:R.cnt.new,'금액(원)':won(R.NEW)},
+    {항목:'당월 회입(완납)',건수:R.cnt.coll,'금액(원)':won(R.COLL)},
+    {항목:'이월 부분수납',건수:R.cnt.part,'금액(원)':won(R.PARTIAL)},
+    {항목:'이월 잔액(당월)',건수:R.cnt.carry,'금액(원)':won(R.carryCurr)},
+    {항목:'검증: 전월+신규-회입-부분수납',건수:'','금액(원)':won(R.lhs)},
+    {항목:'당월(목표)',건수:'','금액(원)':won(R.M)},
+    {항목:'검증 결과',건수:R.ok?'일치':'불일치','금액(원)':won(R.lhs-R.M)},
+  ];
+  return csv(rows,['항목','건수','금액(원)']);
+}
+function download(text,fname){
+  const b=new Blob([text],{type:'text/csv;charset=utf-8'});
+  const u=URL.createObjectURL(b); const a=document.createElement('a');
+  a.href=u; a.download=fname; a.click(); setTimeout(()=>URL.revokeObjectURL(u),1500);
+}
+
+// ---------- UI ----------
+const FILES={}; // {'외래-전월':File,...}
+function slotHtml(dom,role){
+  return `<div class="slot"><span class="lab">${role} · ${dom==='외래'?(role==='전월'?'지난달 최종 보고본':'이번 달 raw'):(role==='전월'?'지난달 최종 보고본':'이번 달 raw')}</span>
+    <label class="drop" data-key="${dom}-${role}">
+      <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" width="16" height="16"><path d="M12 5v14M5 12l7-7 7 7"/></svg></span>
+      <span class="txt"><span class="t1">파일 선택 또는 끌어놓기</span><span class="t2">xlsx · xls · csv</span></span>
+      <input type="file" accept=".xlsx,.xls,.csv" data-key="${dom}-${role}">
+    </label></div>`;
+}
+['외래','입원'].forEach(dom=>{
+  const closeHtml=`<div class="slot closeslot"><span class="lab">지난달 마감 잔액 · 선택 (연속성 확인용)</span>
+    <input class="closein" id="close-${dom}" inputmode="numeric" autocomplete="off" placeholder="예: 16,711,150"></div>`;
+  document.getElementById('panel-'+dom).insertAdjacentHTML('beforeend', slotHtml(dom,'전월')+slotHtml(dom,'당월')+closeHtml);
+});
+function setFile(key,file){
+  FILES[key]=file;
+  const drop=document.querySelector(`.drop[data-key="${key}"]`);
+  drop.classList.add('filled');
+  drop.querySelector('.t1').textContent=file.name;
+  drop.querySelector('.t2').textContent=(file.size/1024).toFixed(0)+' KB';
+  refreshRun();
+}
+document.querySelectorAll('input[type=file]').forEach(inp=>{
+  inp.addEventListener('change',e=>{ if(e.target.files[0]) setFile(inp.dataset.key,e.target.files[0]); });
+});
+document.querySelectorAll('.drop').forEach(d=>{
+  d.addEventListener('dragover',e=>{e.preventDefault();d.classList.add('over');});
+  d.addEventListener('dragleave',()=>d.classList.remove('over'));
+  d.addEventListener('drop',e=>{e.preventDefault();d.classList.remove('over');
+    if(e.dataTransfer.files[0]) setFile(d.dataset.key,e.dataTransfer.files[0]);});
+});
+function readyDomains(){
+  return ['외래','입원'].filter(dom=>FILES[dom+'-전월']&&FILES[dom+'-당월']);
+}
+function refreshRun(){
+  const r=readyDomains();
+  document.getElementById('runBtn').disabled=r.length===0;
+  document.getElementById('runNote').textContent = r.length? (r.join('·')+' 결산 준비됨') : '각 과에 전월·당월 파일을 넣어주세요';
+}
+
+document.getElementById('runBtn').addEventListener('click',async()=>{
+  const results=document.getElementById('results'); const errbox=document.getElementById('errbox');
+  results.innerHTML=''; errbox.innerHTML='';
+  for(const dom of readyDomains()){
+    try{
+      const pf=await readRows(FILES[dom+'-전월']);
+      const cf=await readRows(FILES[dom+'-당월']);
+      const prev=filterDb(pf.rows,dom);
+      const curr=filterDb(cf.rows,dom);
+      const R=reconcile(prev,curr);
+      R.warns=checkGuards(dom,pf,cf,prev,curr,R,FILES[dom+'-전월'],FILES[dom+'-당월']);
+      renderResult(dom,R);
+    }catch(err){
+      errbox.insertAdjacentHTML('beforeend',`<div class="err">[${dom}] ${err.message}</div>`);
+    }
+  }
+});
+
+// ---------- 안전장치 ----------
+function fmtD(s){ return s?`${s.slice(0,4)}-${s.slice(4,6)}-${s.slice(6,8)}`:''; }
+function parseWon(s){ if(s==null)return null; s=String(s).replace(/[^0-9-]/g,''); return s===''?null:Number(s); }
+function checkGuards(dom,pf,cf,prev,curr,R,prevFile,currFile){
+  const w=[];
+  // ① 전월/당월 뒤바뀜 — 형식
+  if(pf.meta.kind==='raw' && cf.meta.kind==='report')
+    w.push('전월 칸에 raw, 당월 칸에 보고본이 들어간 것 같습니다. 두 파일 위치가 바뀌지 않았는지 확인하세요.');
+  // ① 전월/당월 뒤바뀜 — 날짜
+  if(pf.meta.maxDate && cf.meta.maxDate && pf.meta.maxDate>cf.meta.maxDate)
+    w.push(`전월 파일의 최신 내원일(${fmtD(pf.meta.maxDate)})이 당월(${fmtD(cf.meta.maxDate)})보다 나중입니다. 전월·당월이 바뀌었는지 확인하세요.`);
+  // ② 외래/입원 칸 오배치 (당월 raw 기준: 퇴원일 비율)
+  if(dom==='입원' && cf.meta.dischargeRatio<0.3)
+    w.push('입원 당월 파일인데 퇴원일이 거의 비어 있습니다. 외래 파일을 잘못 넣었는지 확인하세요.');
+  if(dom==='외래' && cf.meta.dischargeRatio>0.6)
+    w.push('외래 당월 파일인데 퇴원일이 대부분 채워져 있습니다. 입원 파일을 잘못 넣었는지 확인하세요.');
+  // ③ 같은 파일 중복
+  const sameKeys = prev.length===curr.length && new Set(prev.map(r=>r.KEY)).size===new Set([...prev,...curr].map(r=>r.KEY)).size;
+  if(prevFile.name===currFile.name || (sameKeys && R.A===R.M))
+    w.push('전월과 당월 내용이 동일합니다. 같은 파일을 두 번 올리지 않았는지 확인하세요.');
+  // ④ 지난달 마감액 연속성 (선택 입력)
+  const cin=document.getElementById('close-'+dom);
+  const prevClose=cin?parseWon(cin.value):null;
+  if(prevClose!=null && prevClose!==R.A)
+    w.push(`입력하신 지난달 마감액(${won(prevClose)})과 전월 파일 집계액(${won(R.A)})이 다릅니다. 전월 파일이 지난달 최종본이 맞는지 확인하세요.`);
+  // ⑤ 급격한 변동
+  if(R.A>0 && (R.M>R.A*3 || R.M<R.A*0.34))
+    w.push('당월 잔액이 전월 대비 큰 폭으로 변했습니다. 파일이 맞는지 한 번 더 확인하세요.');
+  return w;
+}
+
+function renderResult(dom,R){
+  const term=(k,v,cls='')=>`<div class="term ${cls}"><span class="v">${won(v)}</span><span class="k">${k}</span></div>`;
+  const op=s=>`<span class="op">${s}</span>`;
+  const isIn=dom==='입원';
+  let eq=term('전월 잔액',R.A)+op('+')+term('신규',R.NEW)+op('−')+term('회입',R.COLL);
+  if(isIn) eq+=op('−')+term('이월 부분수납',R.PARTIAL);
+  eq+=op('=')+term('당월 잔액',R.M,'result-term');
+  const badge=R.ok?`<span class="badge ok">✓ 검증 일치</span>`:`<span class="badge bad">불일치 ${won(R.lhs-R.M)}</span>`;
+  const diff=R.ok?`검증식이 당월 잔액과 정확히 일치합니다 (차이 0원).`
+                 :`검증식 결과 <b>${won(R.lhs)}</b> 와 당월 <b>${won(R.M)}</b> 가 <b>${won(R.lhs-R.M)}</b> 어긋납니다. 원본을 확인하세요.`;
+  const dlBtn=(label,fn)=>`<a class="dl" data-fn="${fn}"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0l-4-4m4 4l4-4M4 21h16"/></svg>${label}</a>`;
+  const warnsHtml=(R.warns&&R.warns.length)?
+    `<div class="warns"><div class="wtitle"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M10.3 3.9 1.8 18a2 2 0 0 0 1.7 3h17a2 2 0 0 0 1.7-3L13.7 3.9a2 2 0 0 0-3.4 0z"/></svg>점검 필요 ${R.warns.length}건</div>`
+     +R.warns.map(x=>`<div class="witem">${x}</div>`).join('')+`</div>`:'';
+  const card=document.createElement('div');
+  card.className='result'+(R.ok?'':' bad');
+  card.innerHTML=`
+    <div class="rhead"><span class="name">${dom} 결산</span>${badge}</div>
+    <div class="bridge"><div class="eq">${eq}</div><div class="diffline">${diff}</div></div>
+    ${warnsHtml}
+    <table class="stats">
+      <tr><td class="lab">전월 필터 후</td><td class="cnt">${R.cnt.prev}건</td><td class="amt">${won(R.A)}</td></tr>
+      <tr><td class="lab">당월 신규 발생</td><td class="cnt">${R.cnt.new}건</td><td class="amt">${won(R.NEW)}</td></tr>
+      <tr><td class="lab">당월 회입(완납)</td><td class="cnt">${R.cnt.coll}건</td><td class="amt">${won(R.COLL)}</td></tr>
+      ${isIn?`<tr><td class="lab">이월 부분수납</td><td class="cnt">${R.cnt.part}건</td><td class="amt">${won(R.PARTIAL)}</td></tr>`:''}
+      <tr><td class="lab">이월 잔액</td><td class="cnt">${R.cnt.carry}건</td><td class="amt">${won(R.carryCurr)}</td></tr>
+      <tr><td class="lab" style="font-weight:700;color:var(--ink)">당월 전체 미수</td><td class="cnt">${R.cnt.curr}건</td><td class="amt" style="color:var(--green)">${won(R.M)}</td></tr>
+    </table>
+    <div class="downloads">
+      ${dlBtn('결산요약','sum')}${dlBtn('신규발생 명단','new')}${dlBtn('회입 명단','coll')}${dlBtn('전체미수 명단','full')}
+    </div>`;
+  const listCsv=(rows,withGubun)=>{
+    const cols=(withGubun?['발생구분']:[]).concat(outCols(rows));
+    const outc=cols.map(c=>c==='미수계'?'미수금액':c);
+    const renamed=rows.map(r=>{const o={};cols.forEach(c=>{o[c==='미수계'?'미수금액':c]=r[c];});return o;});
+    return csv(renamed,outc);
+  };
+  card.querySelectorAll('a.dl').forEach(a=>{
+    a.addEventListener('click',()=>{
+      const fn=a.dataset.fn;
+      if(fn==='sum')  download(makeSummary(dom,R), `${dom}_결산요약.csv`);
+      if(fn==='new')  download(listCsv(R.newRows,false), `${dom}_신규발생명단.csv`);
+      if(fn==='coll') download(listCsv(R.collRows,false), `${dom}_회입명단.csv`);
+      if(fn==='full') download(listCsv(R.full,true), `${dom}_전체미수명단.csv`);
+    });
+  });
+  document.getElementById('results').appendChild(card);
+}
+</script>
+</body>
+</html>
