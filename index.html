@@ -220,24 +220,54 @@ function reconcile(prev,curr){
   const sum=(arr)=>arr.reduce((a,r)=>a+r['미수금액'],0);
   const keys=arr=>new Set(arr.map(r=>r['KEY']));
   const kp=keys(prev), kc=keys(curr);
-  const inNew=k=>kc.has(k)&&!kp.has(k);
-  const inColl=k=>kp.has(k)&&!kc.has(k);
-  const carry=[...kp].filter(k=>kc.has(k));
   const per=(arr)=>{const m=new Map();for(const r of arr)m.set(r['KEY'],(m.get(r['KEY'])||0)+r['미수금액']);return m;};
-  const ca=per(prev), cb=per(curr);
+  const info=(arr)=>{const m=new Map();for(const r of arr)if(!m.has(r['KEY']))m.set(r['KEY'],r);return m;};
+  const ca=per(prev), cb=per(curr), ia=info(prev), ib=info(curr);
   const A=sum(prev), M=sum(curr);
-  const newRows=curr.filter(r=>inNew(r['KEY']));
-  const collRows=prev.filter(r=>inColl(r['KEY']));
+
+  const newRows=curr.filter(r=>kc.has(r['KEY'])&&!kp.has(r['KEY']));
+  const collRows=prev.filter(r=>kp.has(r['KEY'])&&!kc.has(r['KEY']));
+  const carry=[...kp].filter(k=>kc.has(k));
   const NEW=sum(newRows), COLL=sum(collRows);
-  let PARTIAL=0; const partRows=[];
-  for(const k of carry){ const d=(ca.get(k)||0)-(cb.get(k)||0);
-    if(d!==0){ PARTIAL+=d; const nm=(prev.find(r=>r['KEY']===k)||{})['환자명']||'';
-      partRows.push({IDNO:k.split('|')[0],'내/입원일':k.split('|')[1],환자명:nm,전월미수:ca.get(k)||0,당월미수:cb.get(k)||0,'부분수납(증감)':(cb.get(k)||0)-(ca.get(k)||0)}); } }
+
+  // 이월 → 부분회입(금액변동) vs 동일이월
+  let PARTIAL=0; const partRows=[]; const carryUnchanged=[];
+  for(const k of carry){
+    const a=ca.get(k)||0, b=cb.get(k)||0, d=a-b;
+    const r=ia.get(k)||{}; const rc=ib.get(k)||{};
+    if(d!==0){ PARTIAL+=d;
+      partRows.push({IDNO:k.split('|')[0],'내/입원일':k.split('|')[1],환자명:r['환자명']||'',전월미수:a,당월미수:b,'부분수납(증감)':b-a});
+    }else{ carryUnchanged.push(k); }
+  }
   const carryCurr=carry.reduce((a,k)=>a+(cb.get(k)||0),0);
   const lhs=A+NEW-COLL-PARTIAL; const ok=(lhs===M);
-  const full=curr.map(r=>Object.assign({발생구분:inNew(r['KEY'])?'신규':'이월'},r));
-  return {A,M,NEW,COLL,PARTIAL,lhs,ok,newRows,collRows,partRows,full,
-    cnt:{prev:prev.length,curr:curr.length,new:newRows.length,coll:collRows.length,carry:carry.length,part:partRows.length},
+  const full=curr.map(r=>Object.assign({발생구분:(kc.has(r['KEY'])&&!kp.has(r['KEY']))?'신규':'이월'},r));
+
+  // ★ 신구대조표: 전월+당월 합집합의 모든 Key에 대해 상태 부여
+  const allKeys=new Set([...kp,...kc]);
+  const compRows=[];
+  for(const k of allKeys){
+    const a=ca.get(k)||0, b=cb.get(k)||0;
+    const rp=ia.get(k)||{}, rc=ib.get(k)||{};
+    const r=rp['IDNO']?rp:rc;
+    let status;
+    if(kp.has(k)&&!kc.has(k)) status='완전회입';
+    else if(!kp.has(k)&&kc.has(k)) status='신규';
+    else if(a!==b) status='부분회입';
+    else status='이월(동일)';
+    compRows.push({
+      대조결과:status, IDNO:r['IDNO']||k.split('|')[0], 환자명:r['환자명']||'',
+      '내/입원일':r['내/입원일']||k.split('|')[1], 과:r['과']||'', 급종:r['급종']||'',
+      미수구분:(rc['미수구분']||rp['미수구분']||''), 담당자:(rc['담당자']||rp['담당자']||''),
+      미수사유:(rc['미수사유']||rp['미수사유']||''),
+      전월미수:a, 당월미수:b, '증감(당월-전월)':b-a
+    });
+  }
+  compRows.sort((a,b)=>{const o={완전회입:0,부분회입:1,이월동일:2,신규:3,'이월(동일)':2};return (o[a.대조결과]||9)-(o[b.대조결과]||9);});
+
+  return {A,M,NEW,COLL,PARTIAL,lhs,ok,newRows,collRows,partRows,full,compRows,
+    cnt:{prev:prev.length,curr:curr.length,new:newRows.length,coll:collRows.length,
+         carry:carry.length,part:partRows.length,carryUnchanged:carryUnchanged.length},
     carryCurr};
 }
 
@@ -251,15 +281,20 @@ function csv(rows,cols){
 function outCols(rows){ return OUTCOLS.filter(c=> rows.some(r=>c in r)); }
 function makeSummary(name,R){
   const rows=[
-    {항목:'전월 필터 후',건수:R.cnt.prev,'금액(원)':won(R.A)},
-    {항목:'당월 필터 후',건수:R.cnt.curr,'금액(원)':won(R.M)},
-    {항목:'당월 신규 발생',건수:R.cnt.new,'금액(원)':won(R.NEW)},
-    {항목:'당월 회입(완납)',건수:R.cnt.coll,'금액(원)':won(R.COLL)},
-    {항목:'이월 부분수납',건수:R.cnt.part,'금액(원)':won(R.PARTIAL)},
-    {항목:'이월 잔액(당월)',건수:R.cnt.carry,'금액(원)':won(R.carryCurr)},
-    {항목:'검증: 전월+신규-회입-부분수납',건수:'','금액(원)':won(R.lhs)},
-    {항목:'당월(목표)',건수:'','금액(원)':won(R.M)},
-    {항목:'검증 결과',건수:R.ok?'일치':'불일치','금액(원)':won(R.lhs-R.M)},
+    {항목:'[전월 마감]',건수:R.cnt.prev,'금액(원)':won(R.A)},
+    {항목:'',건수:'','금액(원)':''},
+    {항목:'[당월 변동]',건수:'','금액(원)':''},
+    {항목:'  신규 발생',건수:R.cnt.new,'금액(원)':'+'+won(R.NEW)},
+    {항목:'  완전회입(수납 완료)',건수:R.cnt.coll,'금액(원)':'-'+won(R.COLL)},
+    {항목:'  부분회입(분할수납·조정)',건수:R.cnt.part,'금액(원)':'-'+won(R.PARTIAL)},
+    {항목:'  이월(동일)',건수:R.cnt.carryUnchanged,'금액(원)':won(R.carryCurr-R.partRows.reduce((a,r)=>a+r.당월미수,0))},
+    {항목:'',건수:'','금액(원)':''},
+    {항목:'[당월 마감]',건수:R.cnt.curr,'금액(원)':won(R.M)},
+    {항목:'',건수:'','금액(원)':''},
+    {항목:'[검증]',건수:'','금액(원)':''},
+    {항목:'  전월+신규-완전회입-부분회입',건수:'','금액(원)':won(R.lhs)},
+    {항목:'  당월(목표)',건수:'','금액(원)':won(R.M)},
+    {항목:'  차이',건수:R.ok?'일치':'불일치','금액(원)':won(R.lhs-R.M)},
   ];
   return csv(rows,['항목','건수','금액(원)']);
 }
@@ -362,10 +397,7 @@ function checkGuards(dom,pf,cf,prev,curr,R,prevFile,currFile){
 function renderResult(dom,R){
   const term=(k,v,cls='')=>`<div class="term ${cls}"><span class="v">${won(v)}</span><span class="k">${k}</span></div>`;
   const op=s=>`<span class="op">${s}</span>`;
-  const isIn=dom==='입원';
-  let eq=term('전월 잔액',R.A)+op('+')+term('신규',R.NEW)+op('−')+term('회입',R.COLL);
-  if(isIn) eq+=op('−')+term('이월 부분수납',R.PARTIAL);
-  eq+=op('=')+term('당월 잔액',R.M,'result-term');
+  let eq=term('전월 마감',R.A)+op('+')+term('신규',R.NEW)+op('−')+term('완전회입',R.COLL)+op('−')+term('부분회입',R.PARTIAL)+op('=')+term('당월 마감',R.M,'result-term');
   const badge=R.ok?`<span class="badge ok">✓ 검증 일치</span>`:`<span class="badge bad">불일치 ${won(R.lhs-R.M)}</span>`;
   const diff=R.ok?`검증식이 당월 잔액과 정확히 일치합니다 (차이 0원).`
                  :`검증식 결과 <b>${won(R.lhs)}</b> 와 당월 <b>${won(R.M)}</b> 가 <b>${won(R.lhs-R.M)}</b> 어긋납니다. 원본을 확인하세요.`;
@@ -380,15 +412,15 @@ function renderResult(dom,R){
     <div class="bridge"><div class="eq">${eq}</div><div class="diffline">${diff}</div></div>
     ${warnsHtml}
     <table class="stats">
-      <tr><td class="lab">전월 필터 후</td><td class="cnt">${R.cnt.prev}건</td><td class="amt">${won(R.A)}</td></tr>
-      <tr><td class="lab">당월 신규 발생</td><td class="cnt">${R.cnt.new}건</td><td class="amt">${won(R.NEW)}</td></tr>
-      <tr><td class="lab">당월 회입(완납)</td><td class="cnt">${R.cnt.coll}건</td><td class="amt">${won(R.COLL)}</td></tr>
-      ${isIn?`<tr><td class="lab">이월 부분수납</td><td class="cnt">${R.cnt.part}건</td><td class="amt">${won(R.PARTIAL)}</td></tr>`:''}
-      <tr><td class="lab">이월 잔액</td><td class="cnt">${R.cnt.carry}건</td><td class="amt">${won(R.carryCurr)}</td></tr>
-      <tr><td class="lab" style="font-weight:700;color:var(--ink)">당월 전체 미수</td><td class="cnt">${R.cnt.curr}건</td><td class="amt" style="color:var(--green)">${won(R.M)}</td></tr>
+      <tr><td class="lab">전월 마감</td><td class="cnt">${R.cnt.prev}건</td><td class="amt">${won(R.A)}</td></tr>
+      <tr><td class="lab">신규 발생</td><td class="cnt">${R.cnt.new}건</td><td class="amt" style="color:#2B7A5B">+${won(R.NEW)}</td></tr>
+      <tr><td class="lab">완전회입(수납 완료)</td><td class="cnt">${R.cnt.coll}건</td><td class="amt" style="color:var(--red)">-${won(R.COLL)}</td></tr>
+      <tr><td class="lab">부분회입(분할수납·조정)</td><td class="cnt">${R.cnt.part}건</td><td class="amt" style="color:var(--red)">-${won(R.PARTIAL)}</td></tr>
+      <tr><td class="lab">이월(동일)</td><td class="cnt">${R.cnt.carryUnchanged}건</td><td class="amt">${won(R.carryCurr-R.partRows.reduce((a,r)=>a+r.당월미수,0))}</td></tr>
+      <tr><td class="lab" style="font-weight:700;color:var(--ink)">당월 마감</td><td class="cnt">${R.cnt.curr}건</td><td class="amt" style="color:var(--green);font-weight:700">${won(R.M)}</td></tr>
     </table>
     <div class="downloads">
-      ${dlBtn('결산요약','sum')}${dlBtn('신규발생 명단','new')}${dlBtn('회입 명단','coll')}${dlBtn('전체미수 명단','full')}
+      ${dlBtn('결산요약보고서','sum')}${dlBtn('신구대조표','comp')}${dlBtn('신규발생 명단','new')}${dlBtn('완전회입 명단','coll')}${dlBtn('부분회입 명단','part')}${dlBtn('전체미수 명단','full')}
     </div>`;
   const listCsv=(rows,withGubun)=>{
     const cols=(withGubun?['발생구분']:[]).concat(outCols(rows));
@@ -399,9 +431,17 @@ function renderResult(dom,R){
   card.querySelectorAll('a.dl').forEach(a=>{
     a.addEventListener('click',()=>{
       const fn=a.dataset.fn;
-      if(fn==='sum')  download(makeSummary(dom,R), `${dom}_결산요약.csv`);
+      if(fn==='sum')  download(makeSummary(dom,R), `${dom}_결산요약보고서.csv`);
+      if(fn==='comp'){
+        const cols=['대조결과','IDNO','환자명','내/입원일','과','급종','미수구분','담당자','미수사유','전월미수','당월미수','증감(당월-전월)'];
+        download(csv(R.compRows,cols), `${dom}_신구대조표.csv`);
+      }
       if(fn==='new')  download(listCsv(R.newRows,false), `${dom}_신규발생명단.csv`);
-      if(fn==='coll') download(listCsv(R.collRows,false), `${dom}_회입명단.csv`);
+      if(fn==='coll') download(listCsv(R.collRows,false), `${dom}_완전회입명단.csv`);
+      if(fn==='part'){
+        const cols=['IDNO','내/입원일','환자명','전월미수','당월미수','부분수납(증감)'];
+        download(csv(R.partRows,cols), `${dom}_부분회입명단.csv`);
+      }
       if(fn==='full') download(listCsv(R.full,true), `${dom}_전체미수명단.csv`);
     });
   });
