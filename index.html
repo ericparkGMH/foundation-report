@@ -103,7 +103,7 @@
 <div class="wrap">
   <header class="top">
     <span class="kicker">원무팀 · 미수금 결산</span>
-    <h1>미수금 월결산 <span style="font-size:14px;font-weight:600;color:var(--muted2);letter-spacing:0">v1.2</span></h1>
+    <h1>미수금 월결산 <span style="font-size:14px;font-weight:600;color:var(--muted2);letter-spacing:0">v1.3</span></h1>
     <p class="sub">지난달 최종 보고본과 이번 달 raw 파일을 올리면, 신규·회입·이월을 가려내고 검증식이 맞아떨어지는지 확인해 결과 명단을 내려줍니다.</p>
     <span class="privacy">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l7 4v6c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6z"/></svg>
@@ -195,6 +195,44 @@ async function readRows(file){
   for(const r of rows){ if(!isBlank(r['퇴원일']))filled++; const d=String(r['내/입원일']||'').trim(); if(/^[0-9]{8}$/.test(d)&&d>maxD)maxD=d; }
   const meta={kind, dischargeRatio: rows.length?filled/rows.length:0, maxDate:maxD, count:rows.length};
   return {rows, meta};
+}
+
+// ---------- 환불상계: IDNO 단위로 미수+환불 합산, 순액 ≤ 0인 환자 제외 ----------
+function applyRefundOffset(rows){
+  // 1) IDNO별 총합 계산
+  const byId=new Map();
+  for(const r of rows){
+    const id=String(r['IDNO']||'').trim();
+    if(!byId.has(id)) byId.set(id,{sum:0, posRows:[], negRows:[]});
+    const entry=byId.get(id);
+    entry.sum+=r['미수금액'];
+    if(r['미수금액']>=0) entry.posRows.push(r);
+    else entry.negRows.push(r);
+  }
+  // 2) 분류
+  const kept=[];        // 미수 유지 (양수 행만)
+  const offsetList=[];  // 환불상계로 빠진 환자 (순액 ≤ 0)
+  const refundOnly=[];  // 환불만 있는 행 (미수 없이 환불만)
+  for(const [id,e] of byId){
+    if(e.negRows.length===0){
+      // 환불 없음 → 그대로
+      kept.push(...e.posRows);
+    }else if(e.sum>0){
+      // 순액 양수 → 미수 행만 유지 (환불은 제외)
+      kept.push(...e.posRows);
+    }else{
+      // 순액 ≤ 0 → 전부 제외, 상계 명단에 기록
+      const posAmt=e.posRows.reduce((a,r)=>a+r['미수금액'],0);
+      const negAmt=e.negRows.reduce((a,r)=>a+r['미수금액'],0);
+      const rep=e.posRows[0]||e.negRows[0]||{};
+      offsetList.push({
+        IDNO:id, 환자명:rep['환자명']||'',
+        미수합계:posAmt, 환불합계:negAmt, 순액:e.sum,
+        미수건수:e.posRows.length, 환불건수:e.negRows.length
+      });
+    }
+  }
+  return {kept, offsetList};
 }
 
 // ---------- 필터 ----------
@@ -396,9 +434,12 @@ document.getElementById('runBtn').addEventListener('click',async()=>{
       const pf=await readRows(FILES[dom+'-전월']);
       const cf=await readRows(FILES[dom+'-당월']);
       const prev=filterDb(pf.rows,dom);
-      const filteredCurr=filterDb(cf.rows.map(r=>({...r})),dom);
-      const curr=rescue(prev, filteredCurr, cf.rows, dom);
+      // ★ 환불상계: 당월 raw에서 IDNO별 순액 ≤ 0인 환자 제외
+      const {kept:currNoOffset, offsetList}=applyRefundOffset(cf.rows.map(r=>({...r})));
+      const filteredCurr=filterDb(currNoOffset.map(r=>({...r})),dom);
+      const curr=rescue(prev, filteredCurr, currNoOffset, dom);
       const R=reconcile(prev, curr);
+      R.offsetList=offsetList;  // 환불상계 명단
       R.warns=checkGuards(dom,pf,cf,prev,curr,R,FILES[dom+'-전월'],FILES[dom+'-당월']);
       renderResult(dom,R);
     }catch(err){
@@ -463,9 +504,10 @@ function renderResult(dom,R){
       <tr><td class="lab">부분회입(이월 중 금액↓)</td><td class="cnt">${R.cnt.partDown}건</td><td class="amt" style="color:var(--red)">-${won(R.DOWN)}</td></tr>
       <tr><td class="lab">이월(동일)</td><td class="cnt">${R.cnt.carryUnchanged}건</td><td class="amt">${won(R.carryUnchangedAmt)}</td></tr>
       <tr><td class="lab" style="font-weight:700;color:var(--ink)">당월 마감</td><td class="cnt">${R.cnt.curr}건</td><td class="amt" style="color:var(--green);font-weight:700">${won(R.M)}</td></tr>
+      ${R.offsetList&&R.offsetList.length?`<tr><td class="lab" style="color:var(--muted2)">환불상계 제외</td><td class="cnt" style="color:var(--muted2)">${R.offsetList.length}명</td><td class="amt" style="color:var(--muted2)">${won(R.offsetList.reduce((a,r)=>a+r.순액,0))}</td></tr>`:''}
     </table>
     <div class="downloads">
-      ${dlBtn('결산요약보고서','sum')}${dlBtn('신구대조표','comp')}${dlBtn('신규발생 명단','new')}${dlBtn('추가발생 명단','up')}${dlBtn('완전회입 명단','coll')}${dlBtn('부분회입 명단','down')}${dlBtn('전체미수 명단','full')}
+      ${dlBtn('결산요약보고서','sum')}${dlBtn('신구대조표','comp')}${dlBtn('신규발생 명단','new')}${dlBtn('추가발생 명단','up')}${dlBtn('완전회입 명단','coll')}${dlBtn('부분회입 명단','down')}${dlBtn('전체미수 명단','full')}${R.offsetList&&R.offsetList.length?dlBtn('환불상계 명단','offset'):''}
     </div>`;
   const listCsv=(rows,withGubun)=>{
     const cols=(withGubun?['발생구분']:[]).concat(outCols(rows));
@@ -492,6 +534,10 @@ function renderResult(dom,R){
         download(csv(R.partDownRows,cols), `${dom}_부분회입명단.csv`);
       }
       if(fn==='full') download(listCsv(R.full,true), `${dom}_전체미수명단.csv`);
+      if(fn==='offset'){
+        const cols=['IDNO','환자명','미수합계','환불합계','순액','미수건수','환불건수'];
+        download(csv(R.offsetList,cols), `${dom}_환불상계명단.csv`);
+      }
     });
   });
   document.getElementById('results').appendChild(card);
