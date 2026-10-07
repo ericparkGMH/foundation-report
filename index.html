@@ -103,7 +103,7 @@
 <div class="wrap">
   <header class="top">
     <span class="kicker">원무팀 · 미수금 결산</span>
-    <h1>미수금 월결산 <span style="font-size:14px;font-weight:600;color:var(--muted2);letter-spacing:0">v1.4</span></h1>
+    <h1>미수금 월결산 <span style="font-size:14px;font-weight:600;color:var(--muted2);letter-spacing:0">v1.5</span></h1>
     <p class="sub">지난달 최종 보고본과 이번 달 raw 파일을 올리면, 신규·회입·이월을 가려내고 검증식이 맞아떨어지는지 확인해 결과 명단을 내려줍니다.</p>
     <span class="privacy">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2l7 4v6c0 5-3.5 8-7 10-3.5-2-7-5-7-10V6z"/></svg>
@@ -142,8 +142,9 @@
 // ---------- 확정 규칙 ----------
 const CORE=['IDNO','타급','환자명','내/입원일','퇴원일','성별','과','급종','병실','본인계','입금계','조정계','미수계','미수구분','담당자','미수사유'];
 const BASE_CAT=['코로나검사미수','공상미수','재택치료','HPV예방접종미수','불임지원미수','기관청구미수','AK미수','부산의원'];
-const KEYWORDS=['감면','기관','테스트','미수X','미수 X','미수x','인터네셔널SOS','인터네셔널 SOS','재택치료','사무실 보고','보증','강영혜파트장 확인요망','공상','병원장','문화숙'];
+const KEYWORDS=['감면','기관','테스트','미수X','미수 X','미수x','인터네셔널SOS','인터네셔널 SOS','재택치료','사무실 보고','보증','강영혜파트장 확인요망','공상','병원장'];
 const GRADE_EXCLUDE=['A3','D1'];  // A3=의료급여, D1=산재 → 개인미수 통계 대상 아님
+const IDNO_EXCLUDE=['333630'];  // 333630=문화숙(병원장) — 동명이인 방지를 위해 IDNO로 제외
 const DOMAIN={'외래':{extraCat:[],dept:[]}, '입원':{extraCat:['현혈미수'],dept:['SJ','SH']}};
 const OUTCOLS=['IDNO','환자명','내/입원일','퇴원일','과','급종','미수계','미수구분','담당자','미수사유'];
 
@@ -247,7 +248,8 @@ function filterDb(rows,domain){
     const mGrade=GRADE_EXCLUDE.includes((r['급종']||'').trim());  // A3·D1 제외
     const mKw=KEYWORDS.some(k=>comb.includes(k));
     const m41=(r['미수금액']===41000)&&isBlank(r['미수사유']);
-    if(mCat||mDept||mGrade||mKw||m41) continue;
+    const mIdno=IDNO_EXCLUDE.includes(String(r['IDNO']||'').trim());
+    if(mCat||mDept||mGrade||mKw||m41||mIdno) continue;
     if(isBlank(r['미수구분'])) r['미수구분']='개인미수';
     r['KEY']=keyOf(r);
     kept.push(r);
@@ -278,6 +280,7 @@ function rescue(prev, filteredCurr, rawCurr, domain){
     if(rule.dept.includes((rr['과']||'').trim())) continue;              // 과 SJ·SH
     if(KEYWORDS.some(kw=>combRaw.includes(kw))) continue;                // 키워드
     if(toInt(rr['미수계'])===41000&&isBlank(rr['미수사유'])) continue;   // 41,000 무사유
+    if(IDNO_EXCLUDE.includes(String(rr['IDNO']||'').trim())) continue;   // IDNO 제외
     // 구제 (전월 사유·구분 우선, 당월 금액 사용)
     const merged = {...rr};
     merged['미수구분'] = rp['미수구분'] || merged['미수구분'];
